@@ -43,6 +43,7 @@ CARDS = [
     ("NVIDIA GeForce RTX 5090 D", "12.0", 32607, "other", True),
     ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition", "12.0", 97887, "other", True),
     ("NVIDIA RTX A6000", "8.6", 49140, "other", True),
+    ("Tesla V100-PCIE-32GB", "7.0", 32768, "other", True),
     ("NVIDIA GeForce RTX 2080 Ti", "7.5", 11264, "old", False),
     ("NVIDIA GeForce GTX 1080 Ti", "6.1", 11264, "old", False),
     ("NVIDIA A100 80GB PCIe", "8.0", 81920, "old", True),

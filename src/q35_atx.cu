@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 the YASAKANI authors
 #include "pdl.cuh"
+#include "volta_compat.cuh"
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <stdexcept>
@@ -28,26 +29,74 @@ constexpr float ATX_LOG2E = 1.4426950408889634f;
 #endif
 constexpr bool ATX_CVT = ATX_CVT_DEFAULT != 0;                        
 __device__ __forceinline__ void atx_mma(float* c, const unsigned* a, unsigned b0, unsigned b1) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::mma_bf16(c, a, b0, b1);
+#else
+
   asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
+
+#endif
 }
 __device__ __forceinline__ void atx_ldm4(unsigned* r, const void* p) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::ldm_x4(r, p);
+#else
+
   const unsigned s = (unsigned)__cvta_generic_to_shared(p);
   asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(s));
+
+#endif
 }
 __device__ __forceinline__ void atx_ldm4t(unsigned* r, const void* p) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::ldm_x4_trans(r, p);
+#else
+
   const unsigned s = (unsigned)__cvta_generic_to_shared(p);
   asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n" : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3]) : "r"(s));
+
+#endif
 }
 __device__ __forceinline__ void atx_cp16(void* smem, const void* gmem) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp16(smem, gmem);
+#else
+
   asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"((unsigned)__cvta_generic_to_shared(smem)), "l"(gmem));
+
+#endif
 }
 __device__ __forceinline__ void atx_cp4(void* smem, const void* gmem) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp4(smem, gmem);
+#else
+
   asm volatile("cp.async.ca.shared.global [%0], [%1], 4;\n" :: "r"((unsigned)__cvta_generic_to_shared(smem)), "l"(gmem));
+
+#endif
 }
-__device__ __forceinline__ void atx_commit() { asm volatile("cp.async.commit_group;\n" ::); }
-__device__ __forceinline__ void atx_wait1() { asm volatile("cp.async.wait_group 1;\n" ::); }
-template <int N> __device__ __forceinline__ void atx_waitn() { asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); }
+__device__ __forceinline__ void atx_commit() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_commit();
+#else
+ asm volatile("cp.async.commit_group;\n" ::); 
+#endif
+}
+__device__ __forceinline__ void atx_wait1() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_wait<1>();
+#else
+ asm volatile("cp.async.wait_group 1;\n" ::); 
+#endif
+}
+template <int N> __device__ __forceinline__ void atx_waitn() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_wait<N>();
+#else
+ asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); 
+#endif
+}
 __device__ __forceinline__ unsigned atx_pack(float lo, float hi) {
   const __nv_bfloat162 v = __floats2bfloat162_rn(lo, hi); return *reinterpret_cast<const unsigned*>(&v);
 }
@@ -64,8 +113,12 @@ __device__ __forceinline__ float atx_bf_lo(unsigned w) { return __uint_as_float(
 __device__ __forceinline__ float atx_bf_hi(unsigned w) { return __uint_as_float(w & 0xffff0000u); }
 template <bool F16> __device__ __forceinline__ void atx_mma16(float* c, const unsigned* a, unsigned b0, unsigned b1) {
   if constexpr (F16) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+    volta::mma_f16(c, a, b0, b1);
+#else
     asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                  : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
+#endif
   } else atx_mma(c, a, b0, b1);
 }
 template <bool F16> __device__ __forceinline__ unsigned atx_pack16(float lo, float hi) {
@@ -189,7 +242,7 @@ __global__ void __launch_bounds__(NW * 32, NW == 6 ? 1 : 2) q35_atx_kernel(Q35At
   float m0 = -1e30f, m1 = -1e30f, l0 = 0.f, l1 = 0.f;
   for (int t = 0; t < ntiles; ++t) {
     if constexpr (NST >= 2) { if (t + NST - 1 < ntiles) load_tile(t + NST - 1, (t + NST - 1) % NST); atx_commit(); atx_waitn<NST - 1>(); }
-    else { load_tile(t, 0); atx_commit(); asm volatile("cp.async.wait_group 0;\n" ::); }
+    else { load_tile(t, 0); atx_commit(); atx_waitn<0>(); }
     __syncthreads();
     const int stg = NST >= 2 ? t % NST : 0;
     const uint16_t* ks; const uint16_t* vs; const float* ksc = nullptr; const float* vsc = nullptr;
@@ -433,7 +486,7 @@ __global__ void __launch_bounds__(RT * WPT * 32, 1) q35_atx_vsp_kernel(Q35AtxArg
     }
   }
   if (0 < ntiles) {                                                  
-    asm volatile("cp.async.wait_group 0;\n" ::);
+    atx_waitn<0>();
     convert_own(0);
     if (1 < ntiles) load_tile(1, 0);
     atx_commit();
@@ -521,7 +574,7 @@ __global__ void __launch_bounds__(RT * WPT * 32, 1) q35_atx_vsp_kernel(Q35AtxArg
       }
     }
     if (t + 1 < ntiles) {                                            
-      asm volatile("cp.async.wait_group 0;\n" ::);
+      atx_waitn<0>();
       convert_own(b ^ 1);
       if (t + 2 < ntiles) load_tile(t + 2, 0);
       atx_commit();

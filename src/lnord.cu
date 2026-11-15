@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 the YASAKANI authors
 #include "pdl.cuh"
+#include "volta_compat.cuh"
 #include <stdexcept>
 #include <cstdlib>
 #include <algorithm>
@@ -43,8 +44,14 @@ template <int K> __device__ __forceinline__ unsigned lno_field(const unsigned* w
   if constexpr (FB >= 32) return v; else return v & ((1u << FB) - 1u);
 }
 __device__ __forceinline__ void lno_mma(int* d, const unsigned* a, uint2 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::mma_s8(d, a, b.x, b.y);
+#else
+
   asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b.x), "r"(b.y));
+
+#endif
 }
 __device__ __forceinline__ float lno_madd(float acc, float a, float b) { return __fadd_rn(acc, __fmul_rn(a, b)); }   
 __device__ __forceinline__ void lno_touch(const uint4* p) { unsigned x; asm volatile("ld.global.nc.u32 %0, [%1];" : "=r"(x) : "l"(p)); asm volatile("" :: "r"(x)); }   

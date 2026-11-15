@@ -3,6 +3,11 @@
 A local LLM engine for **Windows** and **one NVIDIA RTX GPU** (tested on the **RTX 5090**), built for one model: **Qwen3.8-27B**. Open source, Apache License 2.0.
 日本語は [README.ja.md](README.ja.md)。
 
+> **Fork note (this repository):** this fork adds support for the **Tesla V100** (Volta, compute capability 7.0), which the
+> upstream engine does not run on. The sm_70 kernels use fallbacks for the tensor-core instructions Volta does not have
+> (`src/volta_compat.cuh`, checked by `tools/volta_test/`); building for it needs a CUDA 12.x toolkit. See
+> [BUILDING.md](BUILDING.md#tesla-v100-this-fork). Everything below is the upstream README.
+
 > **Version 0.1.3 (November 15, 2026).** New in this version: the engine is also built to run on other NVIDIA RTX 30, 40 and 50 series cards with 16 GB or more. We have not run it on them, and it is not optimized for them (see [What you need](#what-you-need)). This version also fixes the cause of a rare change of the text part-way through a run (see [Quality](#quality)). Since 0.1.2 the server can take images, optionally (Windows only; contributed in [#4](https://github.com/yasakani-dev/yasakani/pull/4)). Since 0.1.1 it accepts requests with `tools` (tool / function calling), so coding agents and other tool-using apps can connect to it. Engine: [release page](https://github.com/yasakani-dev/yasakani/releases/tag/v0.1.3). Models on Hugging Face: [quality model](https://huggingface.co/yasakani-dev/Qwen3.8-27B-YASAKANI-quality) and [fastest model](https://huggingface.co/yasakani-dev/Qwen3.8-27B-YASAKANI-speed).
 >
 > **Support the development:** crowdfunding on CAMPFIRE for backers living in Japan, until December 16, 2026 - https://camp-fire.jp/projects/992233/view (outside Japan: see [Support](#support))

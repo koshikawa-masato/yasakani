@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 the YASAKANI authors
 #include "kvx_codec.cuh"
+#include "volta_compat.cuh"
 #include "pdl.cuh"
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
@@ -477,21 +478,41 @@ __global__ void __launch_bounds__(128) q35_state_pf_kernel(Q35StateArgs A) {
       const int rr = c >> 5, ch = c & 31, qw = ch >> 3, off = (ch & 7) * 4;
       const size_t src = ((size_t)(t0 + rr) * Q35_GK + kh) * Q35_GD + qw * 32 + off;
       const unsigned dk = (unsigned)__cvta_generic_to_shared(&sk[b][rr][qw * 36 + off]), dq = (unsigned)__cvta_generic_to_shared(&sq[b][rr][qw * 36 + off]);
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dk, A.k + src);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dk), "l"(A.k + src) : "memory");
+#endif
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dq, A.q + src);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dq), "l"(A.q + src) : "memory");
+#endif
     }
     for (int c = tid; c < nr * 8; c += 128) {                             
       const int rr = c >> 3, ch = c & 7;
       const unsigned dv = (unsigned)__cvta_generic_to_shared(&sv[b][rr][ch * 4]);
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dv, A.v + ((size_t)(t0 + rr) * Q35_GV + h) * Q35_GD + blockIdx.y * 32 + ch * 4);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dv), "l"(A.v + ((size_t)(t0 + rr) * Q35_GV + h) * Q35_GD + blockIdx.y * 32 + ch * 4) : "memory");
+#endif
     }
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    volta::cp_commit();
+#else
     asm volatile("cp.async.commit_group;\n" ::: "memory");
+#endif
     if (tid < nr) { seg[b][tid] = q35_exp(A.g[(size_t)(t0 + tid) * Q35_GV + h]); sbt[b][tid] = A.beta[(size_t)(t0 + tid) * Q35_GV + h]; }
   };
   const int base = lane & ~3;
   if (A.M > 0) stage(0, 0);
   for (int t0 = 0, b = 0; t0 < A.M; t0 += Q35_ST_TS, b ^= 1) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    volta::cp_wait<0>();
+#else
     asm volatile("cp.async.wait_group 0;\n" ::: "memory");
+#endif
     __syncthreads();                                                       
     if (t0 + Q35_ST_TS < A.M) stage(t0 + Q35_ST_TS, b ^ 1);
     const int nr = min(Q35_ST_TS, A.M - t0);
@@ -555,21 +576,41 @@ __global__ void __launch_bounds__(512, 1) q35_state_nb_kernel(Q35StateArgs A) {
       const size_t src = ((size_t)(t0 + rr) * Q35_GK + kh) * Q35_GD + qw * 32 + off;
       const unsigned dk = (unsigned)__cvta_generic_to_shared(sk + ((size_t)b * TS + rr) * KQ + qw * 36 + off);
       const unsigned dq = (unsigned)__cvta_generic_to_shared(sq + ((size_t)b * TS + rr) * KQ + qw * 36 + off);
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dk, A.k + src);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dk), "l"(A.k + src) : "memory");
+#endif
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dq, A.q + src);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dq), "l"(A.q + src) : "memory");
+#endif
     }
     for (int c = tid; c < nr * 32; c += 512) {                            
       const int rr = c >> 5, ch = c & 31;
       const unsigned dv = (unsigned)__cvta_generic_to_shared(sv + ((size_t)b * TS + rr) * 128 + ch * 4);
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+      volta::cp16_saddr(dv, A.v + ((size_t)(t0 + rr) * Q35_GV + h) * Q35_GD + ch * 4);
+#else
       asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(dv), "l"(A.v + ((size_t)(t0 + rr) * Q35_GV + h) * Q35_GD + ch * 4) : "memory");
+#endif
     }
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    volta::cp_commit();
+#else
     asm volatile("cp.async.commit_group;\n" ::: "memory");
+#endif
     if (tid < nr) { seg[b * TS + tid] = q35_exp(A.g[(size_t)(t0 + tid) * Q35_GV + h]); sbt[b * TS + tid] = A.beta[(size_t)(t0 + tid) * Q35_GV + h]; }
   };
   const int base = lane & ~3;
   if (A.M > 0) stage(0, 0);
   for (int t0 = 0, b = 0; t0 < A.M; t0 += TS, b ^= 1) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    volta::cp_wait<0>();
+#else
     asm volatile("cp.async.wait_group 0;\n" ::: "memory");
+#endif
     __syncthreads();
     if (t0 + TS < A.M) stage(t0 + TS, b ^ 1);
     const int nr = min(TS, A.M - t0);

@@ -423,10 +423,10 @@ def query_gpus(run=subprocess.run):
 
 
 def gpu_verdict(g):
-    """"tested" (the RTX 5090), "other" (runs, not optimized or tested), "small" (under 16 GB), "old" (compute capability below 8.6)
-    or "nocode" (9.x to 11.x, 13 and newer: the engine has no code for it)."""
+    """"tested" (the RTX 5090), "other" (runs, not optimized or tested), "small" (under 16 GB), "old" (compute capability below 8.6,
+    except 7.0) or "nocode" (9.x to 11.x, 13 and newer: the engine has no code for it)."""
     cc = g.get("cc")
-    if cc is not None and cc < (8, 6):
+    if cc is not None and cc < (8, 6) and cc != (7, 0):
         return "old"
     if cc is not None and not (cc < (9, 0) or cc[0] == 12):
         return "nocode"

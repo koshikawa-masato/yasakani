@@ -4,6 +4,7 @@
 
 
 #include "q35_g6.hpp"
+#include "volta_compat.cuh"
 #include "pm_math.cuh"
 #include <algorithm>
 #include <stdexcept>
@@ -23,13 +24,31 @@ template <int K> __device__ __forceinline__ unsigned g6_field(const unsigned* w,
   if (sh + FB > 32) v |= w[wi + 1] << (32 - sh);
   if constexpr (FB >= 32) return v; else return v & ((1u << FB) - 1u);
 }
-__device__ __forceinline__ void mt_mma(int* d, const unsigned* a, uint2 b) {       
+__device__ __forceinline__ void mt_mma(int* d, const unsigned* a, uint2 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::mma_s8(d, a, b.x, b.y);
+#else
+       
   asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b.x), "r"(b.y));
+
+#endif
 }
-__device__ __forceinline__ void mt_cp_commit() { asm volatile("cp.async.commit_group;\n" ::: "memory"); }
-__device__ __forceinline__ void mt_cp16s(unsigned saddr, const void* gmem_src) {  
+__device__ __forceinline__ void mt_cp_commit() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_commit();
+#else
+ asm volatile("cp.async.commit_group;\n" ::: "memory"); 
+#endif
+}
+__device__ __forceinline__ void mt_cp16s(unsigned saddr, const void* gmem_src) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp16_saddr(saddr, gmem_src);
+#else
+  
   asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(saddr), "l"(gmem_src) : "memory");
+
+#endif
 }
 __device__ __forceinline__ void mt_mad_wide(long long& acc, int a, int b) { asm("mad.wide.s32 %0, %1, %2, %0;" : "+l"(acc) : "r"(a), "r"(b)); }
 template <int K> __global__ void __launch_bounds__(256) mt_predecode2_kernel(TensorDev t, uint4* w8) {
@@ -75,10 +94,22 @@ template <int MB> struct G6C {
   static constexpr size_t SMEM = (size_t)G6_S * (SA + SB) + (size_t)2 * BM * G6_GP * 4 + (size_t)2 * 2 * BM * 4;
   static constexpr int NACC = MB * 4 * 4;                              
 };
-template <int N> __device__ __forceinline__ void g6_cp_wait() { asm volatile("cp.async.wait_group %0;\n" :: "n"(N) : "memory"); }
-__device__ __forceinline__ void g6_mma0(int* d, const unsigned* a, uint2 b) {   
+template <int N> __device__ __forceinline__ void g6_cp_wait() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_wait<N>();
+#else
+ asm volatile("cp.async.wait_group %0;\n" :: "n"(N) : "memory"); 
+#endif
+}
+__device__ __forceinline__ void g6_mma0(int* d, const unsigned* a, uint2 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  d[0] = d[1] = d[2] = d[3] = 0; volta::mma_s8(d, a, b.x, b.y);
+#else
+   
   asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%10,%10,%10,%10};\n"
                : "=r"(d[0]), "=r"(d[1]), "=r"(d[2]), "=r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b.x), "r"(b.y), "r"(0));
+
+#endif
 }
 template <int MB, bool BG, bool PN>   
 __global__ void __launch_bounds__(G6_NT, 1) mt_gemm6_kernel(Q35G6Args P, int MT, int G, long long* skp, int* sks) {
@@ -164,13 +195,24 @@ __global__ void __launch_bounds__(G6_NT, 1) mt_gemm6_kernel(Q35G6Args P, int MT,
       const unsigned bb = bw + slot * SB, as = aw + slot * SA + (s ? a1off : a0off);
       asm volatile("ld.shared.v4.u32 {%0, %1, %2, %3}, [%4];\n" : "=r"(ba.x), "=r"(ba.y), "=r"(ba.z), "=r"(ba.w) : "r"(bb + s * 512));
       asm volatile("ld.shared.v4.u32 {%0, %1, %2, %3}, [%4];\n" : "=r"(bc.x), "=r"(bc.y), "=r"(bc.z), "=r"(bc.w) : "r"(bb + 1024 + s * 512));
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+      volta::ldm_x4(a[0], __cvta_shared_to_generic(as));
+#else
       asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n" : "=r"(a[0][0]), "=r"(a[0][1]), "=r"(a[0][2]), "=r"(a[0][3]) : "r"(as));
+#endif
       const uint2 b0 = make_uint2(ba.x, ba.y), b1 = make_uint2(ba.z, ba.w), b2 = make_uint2(bc.x, bc.y), b3 = make_uint2(bc.z, bc.w);
       #pragma unroll
       for (int i = 0; i < MB; ++i) {                                   
         if (i + 1 < MB)
+          #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+
+          volta::ldm_x4(a[(i + 1) & 1], __cvta_shared_to_generic(as + (i + 1) * 1024));
+
+          #else
           asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
                        : "=r"(a[(i + 1) & 1][0]), "=r"(a[(i + 1) & 1][1]), "=r"(a[(i + 1) & 1][2]), "=r"(a[(i + 1) & 1][3]) : "r"(as + (i + 1) * 1024));
+
+          #endif
         if (first && s == 0) { g6_mma0(d[i][0], a[i & 1], b0); g6_mma0(d[i][1], a[i & 1], b1); g6_mma0(d[i][2], a[i & 1], b2); g6_mma0(d[i][3], a[i & 1], b3); }
         else { mt_mma(d[i][0], a[i & 1], b0); mt_mma(d[i][1], a[i & 1], b1); mt_mma(d[i][2], a[i & 1], b2); mt_mma(d[i][3], a[i & 1], b3); }
       }

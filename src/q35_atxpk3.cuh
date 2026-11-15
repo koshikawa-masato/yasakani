@@ -87,9 +87,15 @@ __device__ __forceinline__ void pk3_conv16_k4_lut(const unsigned* rw, int ch, co
   #pragma unroll
   for (int j = 5; j < 8; ++j) b[j] = plut[(w.y >> (24 - 8 * (j - 4))) & 4095u];
 }
-__device__ __forceinline__ void pk3_mma_s8(int* c, const unsigned* a, unsigned b0, unsigned b1) {           
+__device__ __forceinline__ void pk3_mma_s8(int* c, const unsigned* a, unsigned b0, unsigned b1) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::mma_s8(c, a, b0, b1);
+#else
+           
   asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+r"(c[0]), "+r"(c[1]), "+r"(c[2]), "+r"(c[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
+
+#endif
 }
 __device__ __forceinline__ unsigned pk3_lk4(const uint8_t* tab8, unsigned s0, unsigned s1, unsigned s2, unsigned s3) {   
   return (unsigned)tab8[s0] | ((unsigned)tab8[s1] << 8) | ((unsigned)tab8[s2] << 16) | ((unsigned)tab8[s3] << 24);

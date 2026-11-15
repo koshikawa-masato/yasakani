@@ -5,6 +5,10 @@
 Since 0.1.3 the engine library is built for the RTX 30, 40 and 50 series (compute capability 8.6, 8.9 and 12.x).  It has been tested and
 tuned on the RTX 5090 only; on other cards it runs without that tuning, and its speed and operation are not guaranteed.
 
+This fork adds the Tesla V100 (compute capability 7.0): the engine carries sm_70 code whose tensor-core instructions are
+emulated (see src/volta_compat.cuh), so the V100 is treated as a supported card here.  It is neither tuned nor tested
+like the RTX 5090, and it is much slower; a build for it needs a CUDA 12.x toolkit.
+
 The engine reserves the key-value cache for the whole context when the model is opened.  On a card with less memory than the RTX 5090,
 the default context of 262,144 tokens may not fit next to the model: Windows then keeps part of it in ordinary memory and generation
 becomes several times slower, without an error.  :func:`plan_context` therefore picks, before the model is opened, the longest context
@@ -69,11 +73,13 @@ class GpuInfo:
 
     @property
     def arch(self) -> str:
-        """"ok" (8.6 to 8.9, 12.x: the released engine has code for it), "old" (below 8.6), "no-code" (9.x to 11.x, 13 and newer)
-        or "unknown" (nvidia-smi did not tell)."""
+        """"ok" (7.0, 8.6 to 8.9, 12.x: this build has code for it), "old" (below 8.6, except 7.0), "no-code" (9.x to 11.x,
+        13 and newer) or "unknown" (nvidia-smi did not tell)."""
         cc = self.compute_cap
         if cc is None:
             return "unknown"
+        if cc == (7, 0):
+            return "ok"
         if cc < (8, 6):
             return "old"
         if cc < (9, 0) or cc[0] == 12:
@@ -223,6 +229,10 @@ def describe(g: GpuInfo) -> str:
         return "RTX 5090: the card YASAKANI is tested and tuned on"
     if g.arch == "old":
         return "compute capability %s: below 8.6, the released engine has no code for it" % g.cc_text
+    if g.compute_cap == (7, 0):
+        small = g.total_mib is not None and g.total_mib < QUALITY_MIN_TOTAL_MIB
+        return ("Tesla V100: runs on this fork's Volta code (the tensor-core instructions are emulated), but not optimized or tested "
+                "(only the RTX 5090 is); speed and operation are not guaranteed" + ("; fastest model only" if small else ""))
     if g.arch == "no-code":
         return "compute capability %s: the released engine has no code for it (it is built for 8.6, 8.9 and 12.x)" % g.cc_text
     if g.total_mib is not None and g.total_mib < MIN_TOTAL_MIB:

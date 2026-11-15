@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 the YASAKANI authors
 #include "pdl.cuh"
+#include "volta_compat.cuh"
 #include <stdexcept>
 #include <type_traits>
 #include "kernels.hpp"
@@ -37,30 +38,54 @@ void pfa_set_pm(int on, cudaStream_t st) { cudaMemcpyToSymbolAsync(pfa_pm_on, &o
 template <int LB> __host__ __device__ constexpr int pfa_maxt() { return LB == 1 ? 192 : LB == 3 ? 128 : LB == 4 ? 384 : 256; }
 template <int LB> __host__ __device__ constexpr int pfa_minb() { return (LB == 2 || LB == 4) ? 1 : 2; }
 
-__device__ __forceinline__ void pfa_mma(int* d, const unsigned* a, uint2 b) {       
+__device__ __forceinline__ void pfa_mma(int* d, const unsigned* a, uint2 b) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+  volta::mma_s8(d, a, b.x, b.y);
+#else
+       
 #ifdef PFA_EMU
   emu::mma_m16n8k32_s8(d, a, b.x, b.y);
 #else
   asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
                : "+r"(d[0]), "+r"(d[1]), "+r"(d[2]), "+r"(d[3]) : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b.x), "r"(b.y));
 #endif
+
+#endif
 }
-__device__ __forceinline__ void pfa_cp8(void* smem_dst, const void* gmem_src) {    
+__device__ __forceinline__ void pfa_cp8(void* smem_dst, const void* gmem_src) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp8(smem_dst, gmem_src);
+#else
+    
 #ifdef PFA_EMU
   std::memcpy(smem_dst, gmem_src, 8);
 #else
   unsigned s; asm volatile("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }\n" : "=r"(s) : "l"(smem_dst));
   asm volatile("cp.async.ca.shared.global [%0], [%1], 8;\n" :: "r"(s), "l"(gmem_src) : "memory");
 #endif
+
+#endif
 }
 __device__ __forceinline__ void pfa_cp_commit() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_commit();
+#else
+
 #ifndef PFA_EMU
   asm volatile("cp.async.commit_group;\n" ::: "memory");
 #endif
+
+#endif
 }
 __device__ __forceinline__ void pfa_cp_wait() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+  volta::cp_wait_all();
+#else
+
 #ifndef PFA_EMU
   asm volatile("cp.async.wait_all;\n" ::: "memory");
+#endif
+
 #endif
 }
 template <int K> __device__ __forceinline__ unsigned pfa_field(const unsigned* w, int i) {   

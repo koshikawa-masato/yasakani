@@ -488,7 +488,10 @@ static int pk3_skew_env() { static const int v = [] { const char* e = std::geten
 static int pk3_qk8_env() { static const int v = [] { const char* e = std::getenv("YSKN_ATX_PK3_QK8"); return e ? (std::atoi(e) != 0) : 0; }(); return v; }
 static int pk3_plut_env() { static const int v = [] { const char* e = std::getenv("YSKN_ATX_PK3_PLUT"); return e ? (std::atoi(e) != 0) : 0; }(); return v; }   
 template <int KB, bool VPK, int NST> static void pk3_set_lut(cudaError_t& e) {
-  const cudaError_t r = cudaFuncSetAttribute((const void*)q35_atxpk3_kernel<KB, VPK, 1, 4, NST, true, 4, false, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)pk3_smem<KB, VPK, 1, 4, NST, true, true>());
+  const void* const f = (const void*)q35_atxpk3_kernel<KB, VPK, 1, 4, NST, true, 4, false, true>;
+  const size_t sm = pk3_smem<KB, VPK, 1, 4, NST, true, true>();
+  if (!pk_smem_fits(f, sm)) return;
+  const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)sm);
   if (r != cudaSuccess && e == cudaSuccess) e = r;
 }
 template <int KB, bool VPK, int NST> static void pk3_go_lut(const Q35AtxPkArgs& U, cudaStream_t st) {
@@ -496,7 +499,7 @@ template <int KB, bool VPK, int NST> static void pk3_go_lut(const Q35AtxPkArgs& 
   launch_k(q35_atxpk3_kernel<KB, VPK, 1, 4, NST, true, 4, false, true>, dim3((M + 1) / 2, sp, Q35_KVH), dim3(256), pk3_smem<KB, VPK, 1, 4, NST, true, true>(), st, U);
 }
 template <int KB, bool VPK, int NST, bool SKEW, bool QK8> static void pk3_set(cudaError_t& e) {
-  auto set = [&](const void* f, size_t smem) { const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
+  auto set = [&](const void* f, size_t smem) { if (!pk_smem_fits(f, smem)) return; const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
   set((const void*)q35_atxpk3_kernel<KB, VPK, 1, 4, NST, SKEW, SKEW ? 4 : 0, QK8>, pk3_smem<KB, VPK, 1, 4, NST, SKEW>());
   set((const void*)q35_atxpk3_kernel<KB, VPK, 3, 4, NST, SKEW, 0, QK8>, pk3_smem<KB, VPK, 3, 4, NST, SKEW>());
   set((const void*)q35_atxpk3_kernel<KB, VPK, 6, 2, NST, SKEW, 0, QK8>, pk3_smem<KB, VPK, 6, 2, NST, SKEW>());

@@ -12,6 +12,28 @@
 #include <cstdlib>
 namespace yskn {
 
+namespace {
+// Shared-memory budget of the device in use: cudaFuncSetAttribute rejects a
+// request when the kernel's static shared memory plus the requested dynamic
+// part is over the per-block opt-in limit - 98,304 bytes on Volta, while the
+// kernels here were sized against the 101,376 bytes of sm_120. A shape that
+// does not fit is skipped by the set helpers and never launched on such a GPU
+// (pk_vsp_go and pk4_go use their 3x4 shape for it instead; see q35_atxpk4.cuh).
+size_t pk_smem_limit() {
+  static const size_t v = [] {
+    int dev = 0, val = 0;
+    if (cudaGetDevice(&dev) == cudaSuccess && cudaDeviceGetAttribute(&val, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev) == cudaSuccess && val > 0) return (size_t)val;
+    return (size_t)48 * 1024;
+  }();
+  return v;
+}
+bool pk_smem_fits(const void* f, size_t dyn) {
+  cudaFuncAttributes at{};
+  if (cudaFuncGetAttributes(&at, f) != cudaSuccess) return true;
+  return at.sharedSizeBytes + dyn <= pk_smem_limit();
+}
+}
+
 
 
 
@@ -731,7 +753,7 @@ template <int NS> static void pk_launch(const Q35AtxPkArgs& U, const dim3& grid,
   else launch_k(q35_atxpk_kernel<false, true, NS>, grid, dim3(192), PK_SMEM(NS), st, U);
 }
 template <int KB, bool VPK> static void pk_vsp_set(cudaError_t& e) {
-  auto set = [&](const void* f, size_t smem) { const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
+  auto set = [&](const void* f, size_t smem) { if (!pk_smem_fits(f, smem)) return; const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
   set((const void*)q35_atxpk_vsp_kernel<KB, true, VPK, 1, 4>, pkt_smem<KB, true, VPK>());
   set((const void*)q35_atxpk_vsp_kernel<KB, true, VPK, 3, 4>, pkt_smem<KB, true, VPK>());
   set((const void*)q35_atxpk_vsp_kernel<KB, true, VPK, 6, 2>, pkt_smem<KB, true, VPK>());
@@ -740,13 +762,15 @@ template <int KB, bool VPK> static void pk_vsp_go(const Q35AtxPkArgs& U, cudaStr
   const int M = U.a.M, sp = U.a.splits;
   if (M <= 2) launch_k(q35_atxpk_vsp_kernel<KB, true, VPK, 1, 4>, dim3((M + 1) / 2, sp, Q35_KVH), dim3(128), pkt_smem<KB, true, VPK>(), st, U);
   else if (M <= 8) launch_k(q35_atxpk_vsp_kernel<KB, true, VPK, 3, 4>, dim3((M + 7) / 8, sp, Q35_KVH), dim3(384), pkt_smem<KB, true, VPK>(), st, U);
+  else if (!pk_smem_fits((const void*)q35_atxpk_vsp_kernel<KB, true, VPK, 6, 2>, pkt_smem<KB, true, VPK>()))
+    launch_k(q35_atxpk_vsp_kernel<KB, true, VPK, 3, 4>, dim3((M + 7) / 8, sp, Q35_KVH), dim3(384), pkt_smem<KB, true, VPK>(), st, U);   // 6x2 shape over the device's shared-memory budget (Volta, k = 5 without V packing): the 3x4 shape computes the same tiles
   else launch_k(q35_atxpk_vsp_kernel<KB, true, VPK, 6, 2>, dim3((M + 15) / 16, sp, Q35_KVH), dim3(384), pkt_smem<KB, true, VPK>(), st, U);
 }
 void launch_q35_atx_pk(const Q35AttnArgs& A, const uint8_t* wk, const Q35PkArgs& P, cudaStream_t st) {
   static bool attr = false;
   if (!attr) {
     cudaError_t e = cudaSuccess;
-    auto set = [&](const void* f, size_t smem) { const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
+    auto set = [&](const void* f, size_t smem) { if (!pk_smem_fits(f, smem)) return; const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
     set((const void*)q35_atxpk_kernel<true, true, 2>, PK_SMEM(2)); set((const void*)q35_atxpk_kernel<true, false, 2>, PK_SMEM(2)); set((const void*)q35_atxpk_kernel<false, true, 2>, PK_SMEM(2));
     set((const void*)q35_atxpk_kernel<true, true, 3>, PK_SMEM(3)); set((const void*)q35_atxpk_kernel<true, false, 3>, PK_SMEM(3)); set((const void*)q35_atxpk_kernel<false, true, 3>, PK_SMEM(3));
     pk_vsp_set<4, true>(e); pk_vsp_set<4, false>(e); pk_vsp_set<5, true>(e); pk_vsp_set<5, false>(e);

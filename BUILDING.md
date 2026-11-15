@@ -88,10 +88,11 @@ cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=70 -DCMAKE_CUDA_COMPILER=/usr/loc
 cmake --build build -j
 ```
 
-Two limits on the V100: its shared memory per block is at most 96 KiB (the default paths fit; the opt-in
-`YSKN_ATX2=1` and `YSKN_ATX_NS=4` settings do not, so leave them off), and it is much slower than the RTX 5090 —
-the memory bandwidth is about half and the emulated matrix instructions run on the ordinary cores. Expect the
-engine to work, not to be fast.
+Two limits on the V100: its shared memory per block is at most 96 KiB while the kernels were sized against the
+99 KiB of sm_120, so the two largest 6x2 attention shapes (k = 5 without V packing) do not fit and the launcher
+uses their 3x4 shape instead, which computes the same tiles; the opt-in `YSKN_ATX2=1` and `YSKN_ATX_NS=4`
+settings do not fit either, so leave them off. And it is much slower than the RTX 5090 — the memory bandwidth is
+about half and the emulated matrix instructions run on the ordinary cores. Expect the engine to work, not to be fast.
 
 ## Layout
 

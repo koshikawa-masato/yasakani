@@ -420,7 +420,7 @@ __global__ void __launch_bounds__(RT * WPT * 32, 1) q35_atxpk4_kernel(Q35AtxPkAr
 
 
 template <int KB, bool VPK, bool QK8> static void pk4_set(cudaError_t& e) {
-  auto set = [&](const void* f, size_t smem) { const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
+  auto set = [&](const void* f, size_t smem) { if (!pk_smem_fits(f, smem)) return; const cudaError_t r = cudaFuncSetAttribute(f, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem); if (r != cudaSuccess && e == cudaSuccess) e = r; };
   set((const void*)q35_atxpk4_kernel<KB, VPK, 3, 4, QK8>, pk4_smem<KB, VPK, QK8>());
   set((const void*)q35_atxpk4_kernel<KB, VPK, 6, 2, QK8>, pk4_smem<KB, VPK, QK8>());
 }
@@ -431,6 +431,8 @@ static void pk4_set_all(cudaError_t& e) {
 template <int KB, bool VPK, bool QK8> static void pk4_go(const Q35AtxPkArgs& U, cudaStream_t st) {
   const int M = U.a.M, sp = U.a.splits;
   if (M <= 8) launch_k(q35_atxpk4_kernel<KB, VPK, 3, 4, QK8>, dim3((M + 7) / 8, sp, Q35_KVH), dim3(384), pk4_smem<KB, VPK, QK8>(), st, U);
+  else if (!pk_smem_fits((const void*)q35_atxpk4_kernel<KB, VPK, 6, 2, QK8>, pk4_smem<KB, VPK, QK8>()))
+    launch_k(q35_atxpk4_kernel<KB, VPK, 3, 4, QK8>, dim3((M + 7) / 8, sp, Q35_KVH), dim3(384), pk4_smem<KB, VPK, QK8>(), st, U);   // 6x2 shape over the device's shared-memory budget (Volta, k = 5 without V packing): the 3x4 shape computes the same tiles
   else launch_k(q35_atxpk4_kernel<KB, VPK, 6, 2, QK8>, dim3((M + 15) / 16, sp, Q35_KVH), dim3(384), pk4_smem<KB, VPK, QK8>(), st, U);
 }
 template <int KB, bool VPK> static void pk4_launch(const Q35AtxPkArgs& U, cudaStream_t st) { if (pk3_qk8_env()) pk4_go<KB, VPK, true>(U, st); else pk4_go<KB, VPK, false>(U, st); }
